@@ -1019,11 +1019,11 @@ class WhiteningPenaltyFunction(torch.autograd.Function):
 
                     metric = _whitening_metric(x_detached, w.num_groups)
 
-                    if random.random() < 0.005 or __name__ == "__main__":
-                        logging.info(
-                            f"Whitening: name={w.name}, num_groups={w.num_groups}, num_channels={x_orig.shape[-1]}, "
-                            f"metric={metric.item():.2f} vs. limit={float(w.whitening_limit)}"
-                        )
+                    # if random.random() < 0.005 or __name__ == "__main__":
+                    #     logging.info(
+                    #         f"Whitening: name={w.name}, num_groups={w.num_groups}, num_channels={x_orig.shape[-1]}, "
+                    #         f"metric={metric.item():.2f} vs. limit={float(w.whitening_limit)}"
+                    #     )
 
                     if metric < float(w.whitening_limit):
                         w.prob = w.min_prob

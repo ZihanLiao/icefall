@@ -1856,9 +1856,9 @@ class RelPositionMultiheadAttentionWeights(nn.Module):
                     .sum(dim=-1)
                     .mean(dim=(1, 2))
                 )
-                logging.info(
-                    f"name={self.name}, attn_weights_entropy = {attn_weights_entropy}"
-                )
+                # logging.info(
+                #     f"name={self.name}, attn_weights_entropy = {attn_weights_entropy}"
+                # )
 
 
 class SelfAttention(nn.Module):

@@ -163,7 +163,7 @@ class Lexicon(object):
         lang_dir = Path(lang_dir)
         self.token_table = k2.SymbolTable.from_file(lang_dir / "tokens.txt")
         self.word_table = k2.SymbolTable.from_file(lang_dir / "words.txt")
-
+        
         if (lang_dir / "Linv.pt").exists():
             logging.info(f"Loading pre-compiled {lang_dir}/Linv.pt")
             L_inv = k2.Fsa.from_dict(torch.load(lang_dir / "Linv.pt"))
@@ -177,6 +177,7 @@ class Lexicon(object):
         # transcript FSAs, both of whose labels are word IDs.
         self.L_inv = L_inv
         self.disambig_pattern = disambig_pattern
+        self.lang_dir = lang_dir
 
     @property
     def tokens(self) -> List[int]:

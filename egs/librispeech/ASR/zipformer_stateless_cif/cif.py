@@ -1,6 +1,7 @@
 from typing import Optional, Tuple, Union
 
 import k2
+
 import numpy as np
 import torch
 from torch import nn
@@ -332,7 +333,7 @@ class BATPredictor(nn.Module):
         super().__init__()
 
         self.pad = nn.ConstantPad1d((l_order, r_order), 0)
-        self.cif_conv1d = nn.Conv1d(idim, idim, l_order + r_order + 1, groups=idim)
+        self.cif_conv1d = nn.Conv1d(idim, idim, l_order+r_order+1, groups=idim)
         self.cif_output = nn.Linear(idim, 1)
         self.threshold = threshold
         self.dropout = nn.Dropout(p=dropout)
@@ -349,7 +350,9 @@ class BATPredictor(nn.Module):
         mask_chunk_predictor: Optional[torch.Tensor] = None,
         target_label_length: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        
         h = hidden
+        N, T, C = h.shape
         context = h.transpose(1, 2)  # (N, T, C) -> (N, C, T)
         queries = self.pad(context)  # (N, C, T) -> (N, C, T + l_order + r_order)
         memory = self.cif_conv1d(queries)
@@ -357,24 +360,22 @@ class BATPredictor(nn.Module):
         output = self.dropout(output)
         output = torch.relu(output.transpose(1, 2))
         output = self.cif_output(output)
-        alphas = torch.sigmoid(output)
+        alphas = torch.sigmoid(output) # (N, T, 1)
         alphas = nn.functional.relu(alphas * self.smooth_factor - self.noise_threshold)
-
-        if mask:
+        # (N, T)
+        if mask is not None:
             alphas = alphas * mask.transpose(-1, -2).float()
-
-        if mask_chunk_predictor:
+        if mask_chunk_predictor is not None:
             alphas = alphas * mask_chunk_predictor
 
         alphas = alphas.squeeze(-1)
-
         if target_label_length:
             target_length = target_label_length
         elif target_label is not None:
+            # target_length = target_label.shape.row_splits(1)[1:] - target_label.shape.row_splits(1)[:-1]
             target_length = (target_label != ignore_id).float().sum(-1)
         else:
             target_length = None
-
         token_num = alphas.sum(-1)
 
         if target_length is not None:
@@ -398,13 +399,16 @@ class BATPredictor(nn.Module):
 
         dtype = alpha.dtype
         alpha = alpha.float()
-
+        # print("alpha shape", alpha.shape)
         alpha_sum = alpha.sum(1)
+        # print("alpha sum shape", alpha_sum.shape)
         feat_lengths = (alpha_sum / beta).floor().long()
+        # print("feat_lengths", feat_lengths.shape)
         T = feat_lengths.max()
 
         # aggregate and integrate
         csum = alpha.cumsum(-1)
+        # print("csum shape",csum.shape)
         with torch.no_grad():
             # indices used for scattering
             right_idx = (csum / beta).floor().long().clip(max=T)
@@ -418,13 +422,13 @@ class BATPredictor(nn.Module):
             output = input.new_zeros((B, T + 1, C))
             source_range = torch.arange(1, 1 + S).unsqueeze(0).type_as(input)
             zero = alpha.new_zeros((1,))
-
+ 
         # right scatter
         fire_mask = fire_num > 0
         right_weight = torch.where(
             fire_mask, csum - right_idx.type_as(alpha) * beta, zero
         ).type_as(input)
-        # assert right_weight.ge(0).all(), f"{right_weight} should be non-negative."
+        assert right_weight.ge(0).all(), f"{right_weight} should be non-negative."
         output.scatter_add_(
             1,
             right_idx.unsqueeze(-1).expand(-1, -1, C),
