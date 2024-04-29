@@ -132,16 +132,19 @@ class SubwordsCtcGraphCompiler(object):
         Returns:
           Return a list-of-list of word IDs.
         """
-        token_ids_list = []
+        token_ids_list: List[List[int]] = []
         for text in texts:
-            token_ids = []
+            token_ids: List[int] = []
             for word in self._seg_sentence(text).split(" "):
                 if word in self.word_table:
-                    # word_ids.append(self.word_table[word])
-                    tokens = self.lexicon_table[word].rstrip("\n")
-                    for token in tokens.split(" "):
-                        if token in self.token_table:
-                            token_ids.append(self.token_table[token])
+                    try:
+                        tokens = self.lexicon_table[word].rstrip("\n")
+                        for token in tokens.split(" "):
+                            if token in self.token_table:
+                                token_ids.append(self.token_table[token])
+                    except:
+                        for _ in range(len(word)):
+                            token_ids.append(self.oov_id)
                 else:
                     for i in range(len(word)):
                         token_ids.append(self.oov_id)
@@ -212,7 +215,7 @@ class SubwordsCtcGraphCompiler(object):
         sliding_steps = len(word_list) - window_size + 1 
         for i in range(sliding_steps):
             cur_window = word_list[i:i+window_size]
-            if is_all_english(cur_window[0]) and cur_window[1] == "'S":
+            if self.is_all_english(cur_window[0]) and cur_window[1] == "'S":
                 word_list[i:i+window_size] = [''.join(cur_window)]
                 break
         return word_list
@@ -222,7 +225,7 @@ class SubwordsCtcGraphCompiler(object):
         sliding_steps = len(word_list) - window_size + 1 
         for i in range(sliding_steps):
             cur_window = word_list[i:i+window_size]
-            if is_all_english(cur_window[0]) and cur_window[1] == "'" and cur_window[2] in string.ascii_uppercase:
+            if self.is_all_english(cur_window[0]) and cur_window[1] == "'" and cur_window[2] in string.ascii_uppercase:
                 word_list[i:i+window_size] = [''.join(cur_window)]
                 break
             if cur_window[0] == "I" and cur_window[1] == "'" and cur_window[2] == "AM":

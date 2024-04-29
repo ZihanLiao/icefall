@@ -67,7 +67,7 @@ class LabelSmoothingLoss(torch.nn.Module):
         """
         assert x.ndim == 3
         assert target.ndim == 2
-        assert x.shape[:2] == target.shape
+        assert x.shape[:2] == target.shape, (x.shape[:2], target.shape)
         num_classes = x.size(-1)
         x = x.reshape(-1, num_classes)
         # Now x is of shape (N*T, C)

@@ -16,7 +16,7 @@
 
 
 import random
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Optional
 
 import torch
 import torch.nn as nn
@@ -51,7 +51,7 @@ class BoundaryAwareTransducer(nn.Module):
         transducer_weight: float = 1.0,
         predictor_weight: float = 1.0,
         cif_weight: float = 1.0,
-        r_d: int = 5,
+        r_d: int = 3,
         r_u: int = 5,
     ):
         """
@@ -90,9 +90,9 @@ class BoundaryAwareTransducer(nn.Module):
         self.criterion_quantity = nn.L1Loss()
 
         self.cif_weight = cif_weight
-        if self.cif_weight > 0:
-            self.cif_output_layer = nn.Linear(encoder_dim, vocab_size)
-            self.criterion_ce = LabelSmoothingLoss(ignore_index=self.ignore_index)
+        # if self.cif_weight > 0:
+        self.cif_output_layer = nn.Linear(encoder_dim, vocab_size)
+        self.criterion_ce = LabelSmoothingLoss(ignore_index=self.ignore_index)
 
         self.transducer_weight = transducer_weight
         self.predictor_weight = predictor_weight
@@ -160,11 +160,11 @@ class BoundaryAwareTransducer(nn.Module):
             y_lens.type_as(pre_token_length), pre_token_length
         )
 
-        if self.cif_weight > 0.0:
-            cif_predict = self.cif_output_layer(pre_acoustic_embeds)
-            loss_cif_ce = self.criterion_ce(cif_predict, y_padded_ignore)
-        else:
-            loss_cif_ce = 0.0
+        # if self.cif_weight > 0.0:
+        cif_predict = self.cif_output_layer(pre_acoustic_embeds)
+        loss_cif_ce = self.criterion_ce(cif_predict, y_padded_ignore)
+        # else:
+        #     loss_cif_ce = 0.0
 
         # Note: y does not start with SOS
         # y_padded : [B, S]
@@ -178,6 +178,7 @@ class BoundaryAwareTransducer(nn.Module):
         boundary[:, 3] = encoder_out_lens.float()
 
         pre_peak_index = torch.floor(pre_peak_index).long()
+        # print(pre_peak_index[0])
         s_begin = pre_peak_index - self.r_d
 
         T = encoder_out.size(1)
@@ -200,14 +201,14 @@ class BoundaryAwareTransducer(nn.Module):
 
         s_begin = torch.clamp(s_begin, min=0)
         
-        s_begin = _adjust_pruning_lower_bound(s_begin, self.r_d + self.r_u)
-        print(s_begin)
+        # s_begin = _adjust_pruning_lower_bound(s_begin, self.r_d + self.r_u)
+        
         ranges = s_begin.reshape((B, T, 1)).expand(
             (B, T, min(self.r_u + self.r_d, min(y_lens)))
         ) + torch.arange(
             min(self.r_d + self.r_u, min(y_lens)), device=encoder_out.device
         )
-        
+
         # Test
         boundary = torch.zeros(
             (encoder_out.size(0), 4),
@@ -238,10 +239,11 @@ class BoundaryAwareTransducer(nn.Module):
             px_grad=px_grad,
             py_grad=py_grad,
             boundary=boundary,
-            s_range=5,
+            s_range=6,
         )
-        print(ranges[0, :, 1])
-        exit(1)
+        # print(ranges[0, :, :])
+        # print(ranges.shape)
+        # exit(1)
         # Test end
         
         # am_pruned : [B, T, prune_range, encoder_dim]
@@ -267,11 +269,61 @@ class BoundaryAwareTransducer(nn.Module):
                 boundary=boundary,
                 reduction="sum",
             )
-        
+
         bat_loss = self.transducer_weight * pruned_loss
         quantity_loss = self.predictor_weight * loss_cif_qua
         ce_loss = self.cif_weight * loss_cif_ce
 
+        # if torch.isinf(pruned_loss):
+        #     print(s_begin[1])
+        #     print(min(self.r_u + self.r_d, min(y_lens)))
+        #     print(ranges[1,:,:])
+        #     am = self.simple_am_proj(encoder_out)
+        #     lm = self.simple_lm_proj(decoder_out)
+            
+        #     with torch.cuda.amp.autocast(enabled=False):
+        #         simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(
+        #             lm=lm.float(),
+        #             am=am.float(),
+        #             symbols=y_padded_blank,
+        #             termination_symbol=self.decoder.blank_id,
+        #             lm_only_scale=0.0,
+        #             am_only_scale=0.0,
+        #             boundary=boundary,
+        #             reduction="sum",
+        #             return_grad=True,
+        #         )
+
+        #     # ranges : [B, T, prune_range]
+        #     ranges = k2.get_rnnt_prune_ranges(
+        #         px_grad=px_grad,
+        #         py_grad=py_grad,
+        #         boundary=boundary,
+        #         s_range=6,
+        #     )
+        #     am_pruned, lm_pruned = k2.do_rnnt_pruning(
+        #         am=self.joiner.encoder_proj(encoder_out),
+        #         lm=self.joiner.decoder_proj(decoder_out),
+        #         ranges=ranges,
+        #         )
+
+        # # logits : [B, T, prune_range, vocab_size]
+
+        # # project_input=False since we applied the decoder's input projections
+        # # prior to do_rnnt_pruning (this is an optimization for speed).
+        #     logits = self.joiner(am_pruned, lm_pruned, project_input=False)
+        #     print(ranges[1, :, :])
+        #     with torch.cuda.amp.autocast(enabled=False):
+        #         pruned_loss = k2.rnnt_loss_pruned(
+        #             logits=logits.float(),
+        #             symbols=y_padded_blank,
+        #             ranges=ranges,
+        #             termination_symbol=self.decoder.blank_id,
+        #             boundary=boundary,
+        #             reduction="sum",
+        #         )
+        #     print(pruned_loss)
+        #     exit(1)
         return bat_loss, quantity_loss, ce_loss
 
     def forward_encoder(
@@ -330,8 +382,8 @@ class BoundaryAwareTransducer(nn.Module):
     def forward_predictor(
         self,
         encoder_out: torch.Tensor,
-        y: torch.Tensor,
-        encoder_out_mask: torch.Tensor,
+        y: Optional[torch.Tensor] = None,
+        encoder_out_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         pre_acoustic_embeds, pre_token_length, _, pre_peak_index = self.predictor(

@@ -382,9 +382,16 @@ class BATPredictor(nn.Module):
             alphas *= ((target_length + 1e-4) / token_num)[:, None].repeat(
                 1, alphas.size(1)
             )
-        acoustic_embeds, cif_peak = self.cif(
-            hidden, alphas, self.threshold, self.return_accum
+        acoustic_embeds, fires = cif(
+            hidden, alphas, self.threshold
         )
+        cif_peak = fires.cumsum(-1)
+        # acoustic_embeds, cif_peak = self.cif(
+        #     hidden, alphas, self.threshold, self.return_accum,
+        # )
+        token_num = alphas.sum(-1)
+        token_num_int = torch.max(token_num).type(torch.int32).item()
+        acoustic_embeds = acoustic_embeds[:, :token_num_int, :]
         return acoustic_embeds, token_num, alphas, cif_peak
 
     def cif(
@@ -392,32 +399,28 @@ class BATPredictor(nn.Module):
         input: torch.Tensor,
         alpha: torch.Tensor,
         beta: float = 1.0,
-        return_accum: bool = False,
+        return_accum: bool = True,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         B, S, C = input.size()
         assert tuple(alpha.size()) == (B, S), f"{alpha.size()} != {(B, S)}"
 
         dtype = alpha.dtype
         alpha = alpha.float()
-        # print("alpha shape", alpha.shape)
         alpha_sum = alpha.sum(1)
-        # print("alpha sum shape", alpha_sum.shape)
         feat_lengths = (alpha_sum / beta).floor().long()
-        # print("feat_lengths", feat_lengths.shape)
         T = feat_lengths.max()
 
         # aggregate and integrate
         csum = alpha.cumsum(-1)
-        # print("csum shape",csum.shape)
         with torch.no_grad():
             # indices used for scattering
-            right_idx = (csum / beta).floor().long().clip(max=T)
+            right_idx = (csum / beta).floor().long().clamp(max=T)
             left_idx = right_idx.roll(1, dims=1)
             left_idx[:, 0] = 0
 
             # count # of fires from each source
             fire_num = right_idx - left_idx
-            extra_weights = (fire_num - 1).clip(min=0)
+            extra_weights = (fire_num - 1).clamp(min=0)
             # The extra entry in last dim is for
             output = input.new_zeros((B, T + 1, C))
             source_range = torch.arange(1, 1 + S).unsqueeze(0).type_as(input)
@@ -451,7 +454,9 @@ class BATPredictor(nn.Module):
             tgt_idx = left_idx
             src_feats = input * beta
             for _ in range(extra_steps):
-                tgt_idx = (tgt_idx + 1).clip(max=T)
+                tgt_idx = tgt_idx + 1
+                tgt_idx = tgt_idx.clamp(max=T)
+                # tgt_idx = (tgt_idx + 1).clamp(max=T)
                 # (B, S, 1)
                 src_mask = extra_weights > 0
                 output.scatter_add_(
@@ -460,7 +465,6 @@ class BATPredictor(nn.Module):
                     src_feats * src_mask.unsqueeze(2),
                 )
                 extra_weights -= 1
-
         output = output[:, :T, :]
 
         if return_accum:

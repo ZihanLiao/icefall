@@ -227,14 +227,14 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--predictor-left-order",
         type=int,
-        default=3,
+        default=1,
         help="Predictor left padding order",
     )
 
     parser.add_argument(
         "--predictor-right-order",
         type=int,
-        default=3,
+        default=1,
         help="Predictor right padding order",
     )
 
@@ -299,7 +299,7 @@ def get_parser():
     parser.add_argument(
         "--tensorboard",
         type=str2bool,
-        default=True,
+        default=False,
         help="Should various information be logged in tensorboard.",
     )
 
@@ -629,6 +629,7 @@ def get_predictor_model(params: AttributeDict) -> nn.Module:
         idim=max(_to_int_tuple(params.encoder_dim)),
         l_order=params.predictor_left_order,
         r_order=params.predictor_right_order,
+        return_accum=True,
     )
     return predictor
 
@@ -656,6 +657,8 @@ def get_model(params: AttributeDict) -> nn.Module:
         encoder_dim=max(_to_int_tuple(params.encoder_dim)),
         decoder_dim=params.decoder_dim,
         vocab_size=params.vocab_size,
+        r_d=3,
+        r_u=3,
     )
     return model
 
@@ -838,7 +841,7 @@ def compute_loss(
 
     # Note: We use reduction=sum while computing the loss.
     info["total_loss"] = loss.detach().cpu().item()
-    info["bat_loss"] = bat_loss.detach().cpu().item()
+    info["pruned_loss"] = bat_loss.detach().cpu().item()
     info["quantity_loss"] = quantity_loss.detach().cpu().item()
     info["ce_loss"] = ce_loss.detach().cpu().item()
     
@@ -1135,8 +1138,10 @@ def run(rank, world_size, args):
     checkpoints = load_checkpoint_if_available(
         params=params, model=model, model_avg=model_avg
     )
-    
-    tb_writer = None
+    if args.tensorboard and rank == 0:
+        tb_writer = SummaryWriter(log_dir=f"{params.exp_dir}/tensorboard") 
+    else:
+        tb_writer = None
     
     model.to(device)
     if world_size > 1:
@@ -1176,7 +1181,41 @@ def run(rank, world_size, args):
     train_cuts = data_module.train_cuts()
     
     def remove_short_and_long_utt(c: Cut):
-        return 1.0 <= c.duration <= 20.0
+        # Keep only utterances with duration between 1 second and 20 seconds
+        #
+        # Caution: There is a reason to select 20.0 here. Please see
+        # ../local/display_manifest_statistics.py
+        #
+        # You should use ../local/display_manifest_statistics.py to get
+        # an utterance duration distribution for your dataset to select
+        # the threshold
+        if c.duration < 1.0 or c.duration > 20.0:
+            # logging.warning(
+            #     f"Exclude cut with ID {c.id} from training. Duration: {c.duration}"
+            # )
+            return False
+
+        # In pruned RNN-T, we require that T >= S
+        # where T is the number of feature frames after subsampling
+        # and S is the number of tokens in the utterance
+
+        # In ./zipformer.py, the conv module uses the following expression
+        # for subsampling
+        T = ((c.num_frames - 7) // 2 + 1) // 2
+        # tokens = sp.encode(c.supervisions[0].text, out_type=str)
+        tokens = graph_compiler.texts_to_ids(c.supervisions[0].text)
+        if T < len(tokens):
+            logging.warning(
+                f"Exclude cut with ID {c.id} from training. "
+                f"Number of frames (before subsampling): {c.num_frames}. "
+                f"Number of frames (after subsampling): {T}. "
+                f"Text: {c.supervisions[0].text}. "
+                f"Tokens: {tokens}. "
+                f"Number of tokens: {len(tokens)}"
+            )
+            return False
+
+        return True
 
     train_cuts = train_cuts.filter(remove_short_and_long_utt)
 
